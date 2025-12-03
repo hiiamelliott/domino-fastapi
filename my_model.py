@@ -110,34 +110,6 @@ def predict(data=None, **kwargs):
             "input_received": str(data),
             "message": "This is a template - replace with your actual model logic"
         }
-    
-    # TODO: Replace the above with your actual model logic, for example:
-    # 
-    # # Load your model (do this once, or cache it)
-    # model = load_your_model()
-    # 
-    # # Preprocess input
-    # processed_data = preprocess(data)
-    # 
-    # # Make prediction
-    # prediction = model.predict(processed_data)
-    # 
-    # # Postprocess and return
-    # result = postprocess(prediction)
-    # return result
-    
+
     return result
-
-
-# Optional: You can also define other functions that predict() might call
-def preprocess(data):
-    """Preprocess input data before prediction."""
-    # Add your preprocessing logic here
-    return data
-
-
-def postprocess(prediction):
-    """Postprocess prediction results before returning."""
-    # Add your postprocessing logic here
-    return prediction
 
