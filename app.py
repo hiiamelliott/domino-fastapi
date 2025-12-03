@@ -7,10 +7,11 @@ Following Domino's recommended approach for FastAPI apps with multiple endpoints
 - Configures OpenAPI schema URLs correctly
 """
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, Any, Optional
+import requests
 import os
 import sys
 
@@ -73,6 +74,11 @@ class PredictionResponse(BaseModel):
     metadata: Dict[str, Any]
 
 
+class RemotePredictionRequest(BaseModel):
+    """Request body for /remoteprediction; forwarded to the remote model."""
+    data: Dict[str, Any]
+
+
 @app.get("/")
 async def root():
     """Root endpoint - health check and info."""
@@ -91,6 +97,56 @@ async def root():
 async def health():
     """Health check endpoint."""
     return {"status": "healthy"}
+
+
+@app.post("/remoteprediction")
+async def remote_prediction(request: RemotePredictionRequest):
+    """
+    Forward a prediction request to a remote Domino model.
+
+    The remote model URL is expected to have the form:
+        https://<domino_url>:443/models/<model_id>/latest/model
+
+    where:
+      - <domino_url> comes from DOMINO_REMOTE_MODEL_HOST
+      - <model_id> comes from DOMINO_REMOTE_MODEL_ID
+    """
+    remote_host = os.getenv("DOMINO_REMOTE_MODEL_HOST")
+    model_id = os.getenv("DOMINO_REMOTE_MODEL_ID")
+    access_token = os.getenv("DOMINO_REMOTE_MODEL_TOKEN") or None
+
+    if not remote_host or not model_id:
+        raise HTTPException(
+            status_code=500,
+            detail="Remote model configuration missing; set DOMINO_REMOTE_MODEL_HOST and DOMINO_REMOTE_MODEL_ID.",
+        )
+
+    # Build the remote URL; Domino typically serves models on HTTPS 443
+    remote_url = f"https://{remote_host}:443/models/{model_id}/latest/model"
+
+    # Build auth tuple if a token is provided; Domino model endpoints use token as both user and password
+    auth = (access_token, access_token) if access_token else None
+
+    try:
+        resp = requests.post(remote_url, json={"data": request.data}, timeout=10, auth=auth)
+    except requests.RequestException as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Error calling remote model: {exc}",
+        )
+
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=resp.status_code,
+            detail=f"Remote model returned error {resp.status_code}: {resp.text}",
+        )
+
+    # Pass through the JSON response from the remote model
+    try:
+        return resp.json()
+    except ValueError:
+        # Remote model didn't return JSON
+        return {"raw_response": resp.text}
 
 
 @app.post("/predict", response_model=PredictionResponse)

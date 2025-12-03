@@ -1,25 +1,33 @@
 # FastAPI Deployment in Domino
+By default, Domino applies a wrapper around synchronous models that uses `uwsgi`– a synchronous web server. 
+However, FastAPI requires an asynchronous web server like `uvicorn`, and it is hard to configure a FastAPI-based model endpoint to receive requests in Domino.
 
-This setup allows you to deploy a FastAPI model API in Domino, even though Domino's wrapper uses Flask with uwsgi (synchronous). The solution works by:
+This project demonstrates how to work around this and deploy a FastAPI-based model in Domino.
 
+It works by:
 1. Running a FastAPI/uvicorn server on localhost (separate from Flask)
 2. Proxying requests from Flask to FastAPI via HTTP
-3. Using monkey-patching to intercept Flask routes without modifying Domino's scripts
+3. Using monkey-patching to intercept Flask routes
 
-## Files Added
+## Prerequisites
+**Note:** The FastAPI webapp in this project requires the new Apps architecture in Domino v6.1
+In particular, it requires the deep-linking functionality, and makes use of Custom URL Endings.
 
-- **`fastapi_proxy.py`**: Monkey-patches Flask routes to proxy to FastAPI
-- **`requirements.txt`**: Dependencies (FastAPI, uvicorn, requests)
- - **`app.py`**: FastAPI application (webapp) used behind the proxy
- - **`my_model.py`**: Domino model script that imports `fastapi_proxy` and implements `predict`
+## Solutions 
+There are two solutions in this project:
+1. A standalone model endpoint and optional FastAPI webapp. 
+2. A model script built into a FastAPI webapp
 
-## Setup Instructions
+## Standalone FastAPI Model Endpoint
+### Setup Steps
+1. **Install dependencies**: Ensure `requirements.txt` dependencies are installed in your Domino environment
+2. **Add import to your model script**: Add `import fastapi_proxy` at the top of your model script
+3. **That's it!** Publish your model, and the patching will work automatically
 
-**No modifications to Domino's core scripts needed!** However, you need to ensure `fastapi_proxy` is imported so the patching mechanism activates.
+#### Import FastAPI Proxy into your model script
+This is the **only modification you need to make** - add one import line to your own model script.
 
-### Required Setup Step
-
-**Import `fastapi_proxy` in your model script** (the script that contains your endpoint function):
+Add `import fastapi_proxy` to your model script (the script that contains your endpoint function):
 
 ```python
 # my_model.py - This is the script you'll specify when publishing in Domino
@@ -40,57 +48,17 @@ def predict(data):  # This is the function name you'll specify when publishing
     return result
 ```
 
-This is the **only modification you need to make** - add one import line to your own model script (not to any Domino-provided files).
-
-### When Publishing in Domino
-
-When Domino asks for the script and function:
+#### Publish Model Endpoint in Domino
+Publish your model as usual, providing the script and function:
 - **Script**: The path to your model script (e.g., `my_model.py`)
 - **Function**: The name of your endpoint function (e.g., `predict`)
 
-The script you specify should have:
-1. `import fastapi_proxy` at the top
-2. Your endpoint function (the one you specify as the function name)
-
 **Example**: See `my_model.py` in this project for a complete working example.
 
-### Setup Steps
+### How This Works
+1. **Import Time**: When `fastapi_proxy` is imported, it patches Domino's model endpoint wrapper, to add proxy functionality.
 
-1. **Install dependencies**: Ensure `requirements.txt` dependencies are installed in your Domino environment
-2. **Place files in your project**: All the FastAPI files should be in the same directory as your Domino model files
-3. **Add import to your model script**: Add `import fastapi_proxy` at the top of your model script (the one referenced in `app.cfg` as `script_path`)
-4. **That's it!** The patching will work automatically
-
-### How the Auto-Patching Works
-
-The solution uses three strategies to ensure patching works:
-
-1. **Import Hook**: If `fastapi_proxy` is imported before `model_app`, an import hook intercepts `model_app` imports
-2. **Immediate Patching**: If `model_app` is already imported when `fastapi_proxy` loads, it patches immediately
-3. **Lazy Patching**: As a fallback, `make_model_app` is wrapped to patch on first call
-
-This ensures the patching works regardless of import order, as long as `fastapi_proxy` is imported somewhere.
-
-### Why This Works
-
-- Your model script (with `endpoint_function`) is loaded by Domino's harness system
-- By adding `import fastapi_proxy` to your script, it gets imported when your model loads
-- The patching happens automatically, and Domino's `model_harness.py` and `model_app.py` remain unchanged
-
-### Troubleshooting
-
-Check the logs for these messages to verify patching worked:
-- "FastAPI proxy: Import hook registered"
-- "FastAPI proxy: Successfully patched model_app.make_model_app"
-- "FastAPI proxy: Successfully lazy-patched model_app.make_model_app on first call"
-
-If you don't see any of these messages, ensure `import fastapi_proxy` is in your model script.
-
-## How It Works
-
-1. **Import Time**: When `fastapi_proxy` is imported, it patches `model_app.make_model_app()` to add proxy functionality.
-
-2. **App Creation**: When Flask app is created, the patched `make_model_app()`:
+2. **App Creation**: When Flask app is created, the patched wrapper:
    - Creates the Flask app normally
    - Starts uvicorn in a background process on `localhost:8000`
    - Patches Flask routes to proxy requests to FastAPI
@@ -101,46 +69,42 @@ If you don't see any of these messages, ensure `import fastapi_proxy` is in your
    - If FastAPI is available, request is forwarded and response is returned
    - If FastAPI is unavailable, falls back to original Flask handler
 
-## Configuration
+### Why It Works
+- Your model script is loaded by Domino's model wrapper
+- By adding `import fastapi_proxy` to your script, it gets imported when your model loads
+- The patching happens automatically, and no changes need to be made to Domino's model wrapper.
 
+### Configuration
 You can configure the FastAPI server using environment variables:
-
 - `FASTAPI_HOST`: Host for uvicorn (default: `127.0.0.1`)
 - `FASTAPI_PORT`: Port for uvicorn (default: `8000`)
 
-## Customizing Your FastAPI App
+However, you should not usually need to change these values.
 
-Edit `app.py` to implement or extend your FastAPI endpoints. The current implementation includes a `/predict` endpoint that delegates to `my_model.predict`, plus several debug endpoints for inspecting headers and paths.
+### Troubleshooting
+Check the logs for these messages to verify patching worked:
+- "FastAPI proxy: Import hook registered"
+- "FastAPI proxy: Successfully patched model_app.make_model_app"
+- "FastAPI proxy: Successfully lazy-patched model_app.make_model_app on first call"
 
-## Troubleshooting
+If you don't see any of these messages, ensure `import fastapi_proxy` is in your model script.
 
-- **FastAPI server not starting**: Check that uvicorn is installed (`pip install uvicorn`)
-- **Connection errors**: Ensure the port (default 8000) is not in use
-- **Falling back to Flask**: The proxy will automatically fall back to Flask if FastAPI is unavailable, so your app will still work
+## FastAPI Webapp
+An alternative solution is to publish a FastAPI webapp.
 
-## Notes
+One of the benefits of FastAPI is its autodoc functionality. The automatically generated Swagger documentation can also be used as a tester for your model.
 
-- The Flask wrapper remains unchanged and continues to work
-- FastAPI runs as a separate process, so it has full async capabilities
-- All existing Flask functionality is preserved as a fallback
-- The solution is transparent to Domino's deployment system
+The sample webapp in this project has a `/predict` endpoint which can document and test a local model. In this case, it is `my_model.py`.
 
-## `/predict` endpoint and random number generation
+There is also a `/remoteprediction` endpoint that can be configured to connect to a model endpoint published elsewhere in Domino.
+
+Edit `app.py` to modify or extend these FastAPI endpoints. 
+
+### `/predict` endpoint and random number generation
 
 In this project, the primary FastAPI app is defined in `app.py`, and the Domino model entrypoint is `my_model.py` with a `predict` function.
 
-### Request/response schema
-
-- **Request body model**: `PredictionRequest`
-  - **Field**: `data` (object)
-  - **Type**: `RandomNumberRequest`
-    - **start**: `number` (required)
-    - **stop**: `number` (required)
-- **Response model**: `PredictionResponse`
-  - **prediction**: arbitrary JSON (the result from `my_model.predict`)
-  - **metadata**: object with deployment details (framework, server, etc.)
-
-### Generating a random number
+#### Generating a random number
 
 The `my_model.predict` function has been implemented to mirror the example in `model.py` and generate a random number between `start` and `stop`.
 
@@ -157,7 +121,7 @@ You can call the `/predict` endpoint in **two ways**:
    }
    ```
 
-2. **Using query parameters (convenient in Swagger UI)**:
+2. **Using query parameters (requires deep-linking in Domino v6.1+)**:
 
    - URL: `/predict?start=1&stop=100`
    - Body: any valid `PredictionRequest` (the query parameters take precedence if both are present)
@@ -178,3 +142,74 @@ The `my_model.predict` implementation detects `start` and `stop`, converts them 
 If `start`/`stop` are missing or invalid, the function falls back to the template behavior that echoes input and returns example metadata.
 
 
+### `/remoteprediction` endpoint (forwarding to a Domino model)
+
+The app also exposes a `/remoteprediction` endpoint that forwards requests to a **separately published Domino model** (for example, a model built from `my_model.py` and deployed via the Domino Models UI).
+
+#### Remote model URL format
+
+Domino model endpoints have the form:
+
+```text
+https://<domino_url>:443/models/<model_id>/latest/model
+```
+where:
+
+- **`<domino_url>`**: The Domino hostname (same as the webapp host).
+- **`<model_id>`**: The Domino model’s ID (a Mongo ObjectID).
+
+`app.sh` sets the following environment variables for `app.py`:
+
+- **`DOMINO_REMOTE_MODEL_HOST`**: The Domino hostname for the remote model.
+  - Defaults to `DOMINO_USER_HOST` if not explicitly set.
+- **`DOMINO_REMOTE_MODEL_ID`**: The model id (`<model_id>`) for the remote model endpoint.
+- **`DOMINO_REMOTE_MODEL_TOKEN`** (optional): Access token used for authenticating to the remote model.
+  - If set, `/remoteprediction` uses basic auth `(token, token)` when calling the remote endpoint.
+  - If not set, no auth is attached to the request.
+
+In `app.py`, the `/remoteprediction` endpoint:
+
+- Builds the remote URL from `DOMINO_REMOTE_MODEL_HOST` and `DOMINO_REMOTE_MODEL_ID`.
+- Issues a `POST` to:
+
+  ```text
+  https://<DOMINO_REMOTE_MODEL_HOST>:443/models/<DOMINO_REMOTE_MODEL_ID>/latest/model
+  ```
+
+- Forwards the body as:
+
+  ```json
+  {
+    "data": { ... }
+  }
+  ```
+
+- Optionally attaches basic auth `(DOMINO_REMOTE_MODEL_TOKEN, DOMINO_REMOTE_MODEL_TOKEN)` if a token is configured.
+- Returns the JSON response from the remote model directly (or raw text if the response isn’t valid JSON).
+
+This allows your webapp to act as a lightweight proxy in front of an already-published Domino Model.
+
+### Configuration
+You can configure the FastAPI server using environment variables:
+
+- `DOMINO_APP_PATH`: FastAPI requires an app path to find its own assets.
+  - In Domino v6.1, publish the app with a custom URL ending that matches this variable. 
+
+
+### Publishing the Webapp
+When publishing the webapp, ensure that:
+- Deep linking with query parameters is enabled
+- A custom URL ending is given that matches the value of `DOMINO_APP_PATH`
+  - e.g., if the app is published at `/apps/my-fastapi-app`, `DOMINO_APP_PATH="my-fastapi-app"`
+
+## Troubleshooting
+- **FastAPI server not starting**: Check that uvicorn is installed (`pip install uvicorn`)
+- **Connection errors**: Ensure the port (default 8000) is not in use
+- **Falling back to Flask**: The proxy will automatically fall back to Flask if FastAPI is unavailable, so your app will still work
+
+## Files Added
+
+- **`requirements.txt`**: Dependencies (FastAPI, uvicorn, requests)
+- **`fastapi_proxy.py`**: Monkey-patches Flask routes to proxy to FastAPI
+ - **`my_model.py`**: Domino model script that imports `fastapi_proxy` and implements `predict`
+ - **`app.py`**: FastAPI application that documents and can test the model endpoint

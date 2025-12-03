@@ -17,6 +17,27 @@ echo "Starting FastAPI application..."
 echo "Host: $HOST"
 echo "Port: $PORT"
 
+# Remote model configuration (for /remoteprediction endpoint)
+# DOMINO_REMOTE_MODEL_HOST defaults to the current host if not provided
+DOMINO_REMOTE_MODEL_HOST=${DOMINO_REMOTE_MODEL_HOST:-$DOMINO_USER_HOST}
+# DOMINO_REMOTE_MODEL_ID should be set in Domino to the target model's ID (Mongo ObjectID)
+DOMINO_REMOTE_MODEL_ID=${DOMINO_REMOTE_MODEL_ID:-""}
+# Optional access token for the remote model
+# If set, it will be used as basic auth: (token, token)
+DOMINO_REMOTE_MODEL_TOKEN=${DOMINO_REMOTE_MODEL_TOKEN:-""}
+
+export DOMINO_REMOTE_MODEL_HOST
+export DOMINO_REMOTE_MODEL_ID
+export DOMINO_REMOTE_MODEL_TOKEN
+
+echo "Remote model host: ${DOMINO_REMOTE_MODEL_HOST:-not_set}"
+echo "Remote model id: ${DOMINO_REMOTE_MODEL_ID:-not_set}"
+if [ -n "$DOMINO_REMOTE_MODEL_TOKEN" ]; then
+    echo "Remote model token: (set)"
+else
+    echo "Remote model token: (not set)"
+fi
+
 if [ -n "$DOMINO_APP_PATH" ]; then
     # Normalize the path (ensure it starts with / and doesn't end with /)
     ROOT_PATH=$(echo "$DOMINO_APP_PATH" | sed 's|/*$||')
